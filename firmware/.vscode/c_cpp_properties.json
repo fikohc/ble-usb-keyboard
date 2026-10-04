@@ -1,0 +1,23 @@
+{
+  "configurations": [
+    {
+      "name": "ESP-IDF",
+      "compilerPath": "",
+      "compileCommands": "${workspaceFolder}/build/compile_commands.json",
+      "intelliSenseMode": "gcc-x86",
+      "cStandard": "gnu17",
+      "cppStandard": "gnu++23",
+      "includePath": [
+        "${workspaceFolder}/main/**"
+      ],
+      "browse": {
+        "path": [
+          "${workspaceFolder}",
+          "/Users/user/.espressif/v6.1/esp-idf/components"
+        ],
+        "limitSymbolsToIncludedHeaders": true
+      }
+    }
+  ],
+  "version": 4
+}

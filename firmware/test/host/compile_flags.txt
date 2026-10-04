@@ -1,0 +1,6 @@
+-std=gnu11
+-Wall
+-Istubs
+-I../../main
+-I../../managed_components/espressif__tinyusb/src
+-I/Users/user/.espressif/v6.1/esp-idf/components/unity/unity/src

@@ -1,0 +1,3 @@
+# Host tests: use compile_flags.txt here (stub headers) instead of the firmware build database
+CompileFlags:
+  CompilationDatabase: .

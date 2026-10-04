@@ -1,0 +1,11 @@
+CONFIG_IDF_TARGET="esp32s3"
+
+# BLE control channel
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=3
+
+# USB HID keyboard (TinyUSB takes over the native USB PHY)
+CONFIG_TINYUSB_HID_COUNT=1
+# USB-Serial-JTAG console can't coexist with TinyUSB on the same PHY; logs go to UART0
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
