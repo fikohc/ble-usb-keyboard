@@ -1,26 +1,33 @@
 package org.fikohc.espkbd.ble
 
+import espkbd.shared.generated.resources.Res
+import espkbd.shared.generated.resources.uuid_kbd_heartbeat
+import espkbd.shared.generated.resources.uuid_kbd_keypress
+import espkbd.shared.generated.resources.uuid_kbd_keys
+import espkbd.shared.generated.resources.uuid_kbd_service
+import espkbd.shared.generated.resources.uuid_kbd_state
 import kotlinx.coroutines.flow.Flow
+import org.jetbrains.compose.resources.StringResource
+import org.jetbrains.compose.resources.getString
 import kotlin.uuid.Uuid
 
-// GATT layout of the firmware's keyboard service (firmware/main/ble_svc.c)
-object KbdUuids {
-    val SERVICE: Uuid = Uuid.parse("4b9d0000-6a3e-4f8b-9c21-7d5e3a1b8c00")
+enum class KbdChar(val uuidRes: StringResource) {
+    KEYS(Res.string.uuid_kbd_keys),
+    KEYPRESS(Res.string.uuid_kbd_keypress),
+    HEARTBEAT(Res.string.uuid_kbd_heartbeat),
+    STATE(Res.string.uuid_kbd_state),
 }
 
-enum class KbdChar(val uuid: Uuid) {
-    // Write "shift,a": press all keys in order, then release them
-    KEYS(Uuid.parse("4b9d0001-6a3e-4f8b-9c21-7d5e3a1b8c00")),
+// Service and characteristic UUIDs, loaded from composeResources/values/ble.xml
+class KbdUuids(val service: Uuid, private val chars: Map<KbdChar, Uuid>) {
+    operator fun get(chr: KbdChar): Uuid = chars.getValue(chr)
 
-    // Write: keys that must be held right now ("" releases all, also a heartbeat).
-    // Read/notify: keys the device is holding.
-    KEYPRESS(Uuid.parse("4b9d0002-6a3e-4f8b-9c21-7d5e3a1b8c00")),
-
-    // Write anything; held keys are released after 1 s without one
-    HEARTBEAT(Uuid.parse("4b9d0003-6a3e-4f8b-9c21-7d5e3a1b8c00")),
-
-    // Read/notify: "1" while the USB host has the keyboard mounted
-    STATE(Uuid.parse("4b9d0004-6a3e-4f8b-9c21-7d5e3a1b8c00")),
+    companion object {
+        suspend fun load(): KbdUuids = KbdUuids(
+            service = Uuid.parse(getString(Res.string.uuid_kbd_service)),
+            chars = KbdChar.entries.associateWith { Uuid.parse(getString(it.uuidRes)) },
+        )
+    }
 }
 
 data class BleDevice(val id: String, val name: String)

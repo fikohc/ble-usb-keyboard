@@ -8,6 +8,8 @@ import com.juul.kable.WriteType
 import com.juul.kable.characteristicOf
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
@@ -21,13 +23,19 @@ class KableBleClient : BleClient {
     // Kable builds peripherals from advertisements, so remember the latest one per device
     private val advertisements = mutableMapOf<String, Advertisement>()
 
-    private val scanner = Scanner {
-        filters {
-            match { services = listOf(KbdUuids.SERVICE) }
-        }
-    }
+    private var uuids: KbdUuids? = null
 
-    override fun scan(): Flow<BleDevice> = scanner.advertisements
+    private suspend fun uuids(): KbdUuids = uuids ?: KbdUuids.load().also { uuids = it }
+
+    override fun scan(): Flow<BleDevice> = flow {
+        val service = uuids().service
+        val scanner = Scanner {
+            filters {
+                match { services = listOf(service) }
+            }
+        }
+        emitAll(scanner.advertisements)
+    }
         .onEach { adv -> advertisements[adv.identifier.toString()] = adv }
         .map { adv ->
             val id = adv.identifier.toString()
@@ -36,6 +44,7 @@ class KableBleClient : BleClient {
 
     override suspend fun connect(id: String): KbdLink {
         val adv = advertisements[id] ?: error("Device $id was not found by the scan")
+        val uuids = uuids()
         val peripheral = Peripheral(adv)
         try {
             withTimeout(CONNECT_TIMEOUT) { peripheral.connect() }
@@ -46,12 +55,12 @@ class KableBleClient : BleClient {
             }
             throw e
         }
-        return KableLink(peripheral)
+        return KableLink(peripheral, uuids)
     }
 }
 
-private class KableLink(private val peripheral: Peripheral) : KbdLink {
-    private fun KbdChar.toKable() = characteristicOf(KbdUuids.SERVICE, uuid)
+private class KableLink(private val peripheral: Peripheral, private val uuids: KbdUuids) : KbdLink {
+    private fun KbdChar.toKable() = characteristicOf(uuids.service, uuids[this])
 
     override suspend fun awaitDisconnect() {
         peripheral.state.first { it is State.Disconnected }

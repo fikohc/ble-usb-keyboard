@@ -1,6 +1,11 @@
 package org.fikohc.espkbd
 
 import androidx.lifecycle.ViewModel
+import espkbd.shared.generated.resources.Res
+import espkbd.shared.generated.resources.error_connect
+import espkbd.shared.generated.resources.error_disconnected
+import espkbd.shared.generated.resources.error_scan
+import espkbd.shared.generated.resources.error_write
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -26,10 +31,14 @@ import org.fikohc.espkbd.ble.KbdSession
 import org.fikohc.espkbd.keys.HeldKeys
 import org.fikohc.espkbd.keys.charToKeys
 import org.fikohc.espkbd.keys.parseKeyCsv
+import org.jetbrains.compose.resources.StringResource
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
 enum class LinkStatus { NONE, CONNECTING, CONNECTED }
+
+// An error to show: the exception's message if it has one, otherwise a generic text
+data class UiError(val fallback: StringResource, val detail: String? = null)
 
 data class UiState(
     val devices: List<BleDevice> = emptyList(),
@@ -41,8 +50,8 @@ data class UiState(
     val heldKeys: List<String> = emptyList(),
     // Last keys sent as a tap (soft keyboard), for feedback
     val lastTyped: String? = null,
-    val scanError: String? = null,
-    val linkError: String? = null,
+    val scanError: UiError? = null,
+    val linkError: UiError? = null,
 )
 
 class AppViewModel(
@@ -136,7 +145,7 @@ class AppViewModel(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    _state.update { it.copy(scanError = e.message ?: "Bluetooth scan failed") }
+                    _state.update { it.copy(scanError = UiError(Res.string.error_scan, e.message)) }
                 }
                 delay(scanRetryDelay)
             }
@@ -153,8 +162,10 @@ class AppViewModel(
                 runSession(link)
             } catch (e: CancellationException) {
                 throw e
+            } catch (e: LinkLostException) {
+                _state.update { it.copy(linkError = UiError(Res.string.error_disconnected)) }
             } catch (e: Exception) {
-                _state.update { it.copy(linkError = e.message ?: "Connection failed") }
+                _state.update { it.copy(linkError = UiError(Res.string.error_connect, e.message)) }
             } finally {
                 session = null
                 held.clear()
@@ -175,7 +186,7 @@ class AppViewModel(
         val usb = link.read(KbdChar.STATE) == "1"
         val keys = parseKeyCsv(link.read(KbdChar.KEYPRESS))
         session = KbdSession(link, this, onError = { e ->
-            _state.update { it.copy(linkError = e.message ?: "Write failed") }
+            _state.update { it.copy(linkError = UiError(Res.string.error_write, e.message)) }
         })
         _state.update {
             it.copy(link = LinkStatus.CONNECTED, usbHostConnected = usb, heldKeys = keys, linkError = null)
@@ -184,5 +195,5 @@ class AppViewModel(
         throw LinkLostException()
     }
 
-    private class LinkLostException : Exception("Device disconnected")
+    private class LinkLostException : Exception()
 }

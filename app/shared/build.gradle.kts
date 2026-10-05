@@ -58,6 +58,10 @@ kotlin {
             implementation(libs.kotlinx.coroutinesCore)
             implementation(libs.kable.core)
         }
+        jvmTest.dependencies {
+            // Skiko natives: compose resources query the system theme when loading strings
+            implementation(compose.desktop.currentOs)
+        }
         commonTest.dependencies {
             implementation(libs.kotlin.test)
             implementation(libs.kotlinx.coroutinesTest)
@@ -67,4 +71,8 @@ kotlin {
 
 dependencies {
     androidRuntimeClasspath(libs.compose.uiTooling)
+}
+compose.resources {
+    // desktopApp reads the window title from the shared strings
+    publicResClass = true
 }

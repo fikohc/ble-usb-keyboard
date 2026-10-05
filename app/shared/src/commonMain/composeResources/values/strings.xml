@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="window_title">ESP Keyboard</string>
+
+    <string name="select_device">Select device</string>
+    <string name="scanning">Scanning…</string>
+    <string name="disconnect">Disconnect</string>
+    <string name="usb_host_missing">ESP32 is not connected to a USB host</string>
+
+    <string name="link_not_connected">Not connected</string>
+    <string name="link_connecting">Connecting…</string>
+    <string name="link_connected">Connected</string>
+    <string name="link_disconnected">Disconnected</string>
+    <string name="link_disconnected_reason">Disconnected: %1$s</string>
+
+    <string name="permission_needed">Bluetooth permission is needed to find the keyboard</string>
+    <string name="permission_grant">Grant permission</string>
+
+    <string name="no_device">No device</string>
+    <string name="press_a_key">Press a key</string>
+    <string name="hint_soft_keyboard">Tap here to open the keyboard</string>
+    <string name="hint_hardware_keyboard">Keys typed here go to the host</string>
+    <string name="last_typed">Last typed: %1$s</string>
+
+    <string name="error_scan">Bluetooth scan failed</string>
+    <string name="error_connect">Connection failed</string>
+    <string name="error_write">Write failed</string>
+    <string name="error_disconnected">Device disconnected</string>
+</resources>

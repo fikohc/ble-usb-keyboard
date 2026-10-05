@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- GATT layout of the firmware's keyboard service (firmware/main/ble_svc.c) -->
+<resources>
+    <string name="uuid_kbd_service" translatable="false">4b9d0000-6a3e-4f8b-9c21-7d5e3a1b8c00</string>
+    <!-- Write "shift,a": press all keys in order, then release them -->
+    <string name="uuid_kbd_keys" translatable="false">4b9d0001-6a3e-4f8b-9c21-7d5e3a1b8c00</string>
+    <!-- Write: keys held right now ("" releases all, also a heartbeat). Read/notify: keys held by the device. -->
+    <string name="uuid_kbd_keypress" translatable="false">4b9d0002-6a3e-4f8b-9c21-7d5e3a1b8c00</string>
+    <!-- Write anything; held keys are released after 1 s without one -->
+    <string name="uuid_kbd_heartbeat" translatable="false">4b9d0003-6a3e-4f8b-9c21-7d5e3a1b8c00</string>
+    <!-- Read/notify: "1" while the USB host has the keyboard mounted -->
+    <string name="uuid_kbd_state" translatable="false">4b9d0004-6a3e-4f8b-9c21-7d5e3a1b8c00</string>
+</resources>

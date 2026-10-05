@@ -55,6 +55,23 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import espkbd.shared.generated.resources.Res
+import espkbd.shared.generated.resources.disconnect
+import espkbd.shared.generated.resources.hint_hardware_keyboard
+import espkbd.shared.generated.resources.hint_soft_keyboard
+import espkbd.shared.generated.resources.last_typed
+import espkbd.shared.generated.resources.link_connected
+import espkbd.shared.generated.resources.link_connecting
+import espkbd.shared.generated.resources.link_disconnected
+import espkbd.shared.generated.resources.link_disconnected_reason
+import espkbd.shared.generated.resources.link_not_connected
+import espkbd.shared.generated.resources.no_device
+import espkbd.shared.generated.resources.permission_grant
+import espkbd.shared.generated.resources.permission_needed
+import espkbd.shared.generated.resources.press_a_key
+import espkbd.shared.generated.resources.scanning
+import espkbd.shared.generated.resources.select_device
+import espkbd.shared.generated.resources.usb_host_missing
 import org.fikohc.espkbd.ble.BleDevice
 import org.fikohc.espkbd.ble.KableBleClient
 import org.fikohc.espkbd.keys.SOFT_INPUT_SENTINEL
@@ -62,6 +79,7 @@ import org.fikohc.espkbd.keys.diffSoftInput
 import org.fikohc.espkbd.keys.firmwareName
 import org.fikohc.espkbd.keys.formatKeys
 import org.fikohc.espkbd.keys.parseKeyCsv
+import org.jetbrains.compose.resources.stringResource
 
 @Composable
 fun App(
@@ -102,8 +120,7 @@ private fun TopBar(state: UiState, vm: AppViewModel) {
                 onValueChange = {},
                 readOnly = true,
                 singleLine = true,
-                label = { Text("Device") },
-                placeholder = { Text("Select device") },
+                placeholder = { Text(stringResource(Res.string.select_device)) },
                 supportingText = { Text(linkLabel(state)) },
                 trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
                 modifier = Modifier
@@ -113,7 +130,7 @@ private fun TopBar(state: UiState, vm: AppViewModel) {
             ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
                 if (state.devices.isEmpty()) {
                     DropdownMenuItem(
-                        text = { Text(state.scanError ?: "Scanning…") },
+                        text = { Text(state.scanError?.text() ?: stringResource(Res.string.scanning)) },
                         onClick = {},
                         enabled = false,
                     )
@@ -130,7 +147,7 @@ private fun TopBar(state: UiState, vm: AppViewModel) {
                 if (state.selected != null) {
                     HorizontalDivider()
                     DropdownMenuItem(
-                        text = { Text("Disconnect") },
+                        text = { Text(stringResource(Res.string.disconnect)) },
                         onClick = {
                             expanded = false
                             vm.select(null)
@@ -141,7 +158,7 @@ private fun TopBar(state: UiState, vm: AppViewModel) {
         }
         if (state.link == LinkStatus.CONNECTED && state.usbHostConnected == false) {
             Text(
-                "ESP32 is not connected to a USB host",
+                stringResource(Res.string.usb_host_missing),
                 color = MaterialTheme.colorScheme.onErrorContainer,
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier
@@ -168,12 +185,17 @@ private fun DeviceRow(device: BleDevice) {
     }
 }
 
+@Composable
 private fun linkLabel(state: UiState): String = when {
-    state.selected == null -> state.scanError ?: "Not connected"
-    state.link == LinkStatus.CONNECTED -> "Connected"
-    state.link == LinkStatus.CONNECTING -> "Connecting…"
-    else -> state.linkError?.let { "Disconnected: $it" } ?: "Disconnected"
+    state.selected == null -> state.scanError?.text() ?: stringResource(Res.string.link_not_connected)
+    state.link == LinkStatus.CONNECTED -> stringResource(Res.string.link_connected)
+    state.link == LinkStatus.CONNECTING -> stringResource(Res.string.link_connecting)
+    else -> state.linkError?.let { stringResource(Res.string.link_disconnected_reason, it.text()) }
+        ?: stringResource(Res.string.link_disconnected)
 }
+
+@Composable
+private fun UiError.text(): String = detail ?: stringResource(fallback)
 
 @Composable
 private fun PermissionPanel(onRequest: () -> Unit) {
@@ -182,9 +204,9 @@ private fun PermissionPanel(onRequest: () -> Unit) {
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text("Bluetooth permission is needed to find the keyboard", textAlign = TextAlign.Center)
+        Text(stringResource(Res.string.permission_needed), textAlign = TextAlign.Center)
         Spacer(Modifier.height(16.dp))
-        Button(onClick = onRequest) { Text("Grant permission") }
+        Button(onClick = onRequest) { Text(stringResource(Res.string.permission_grant)) }
     }
 }
 
@@ -263,10 +285,10 @@ private fun PanelContent(state: UiState) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         when {
             state.link != LinkStatus.CONNECTED -> {
-                Message("No device")
-                if (state.link == LinkStatus.CONNECTING) Hint("Connecting…")
+                Message(stringResource(Res.string.no_device))
+                if (state.link == LinkStatus.CONNECTING) Hint(stringResource(Res.string.link_connecting))
             }
-            state.usbHostConnected == false -> Message("ESP32 is not connected to a USB host")
+            state.usbHostConnected == false -> Message(stringResource(Res.string.usb_host_missing))
             state.heldKeys.isNotEmpty() -> Text(
                 formatKeys(state.heldKeys),
                 fontSize = 40.sp,
@@ -274,12 +296,16 @@ private fun PanelContent(state: UiState) {
                 textAlign = TextAlign.Center,
             )
             else -> {
-                Message("Press a key")
-                Hint(if (usesSoftKeyboard) "Tap here to open the keyboard" else "Keys typed here go to the host")
+                Message(stringResource(Res.string.press_a_key))
+                Hint(
+                    stringResource(
+                        if (usesSoftKeyboard) Res.string.hint_soft_keyboard else Res.string.hint_hardware_keyboard,
+                    ),
+                )
             }
         }
         if (state.link == LinkStatus.CONNECTED) {
-            state.lastTyped?.let { Hint("Last typed: ${formatKeys(parseKeyCsv(it))}") }
+            state.lastTyped?.let { Hint(stringResource(Res.string.last_typed, formatKeys(parseKeyCsv(it)))) }
         }
     }
 }
