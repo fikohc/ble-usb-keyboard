@@ -58,6 +58,16 @@ class KeysTest {
         assertEquals(SoftEdit(0, "a"), diffSoftInput(SOFT_INPUT_SENTINEL + "a"))
         assertEquals(SoftEdit(1, ""), diffSoftInput(SOFT_INPUT_SENTINEL.dropLast(1)))
         assertEquals(SoftEdit(0, ""), diffSoftInput(SOFT_INPUT_SENTINEL))
-        assertEquals(SoftEdit(2, "yz"), diffSoftInput("xxxxxxyz"))
+        assertEquals(SoftEdit(2, "yz"), diffSoftInput("xxxxxxyz", base = "xxxxxxxx"))
+        // Diffed against the previous text, not the sentinel
+        assertEquals(SoftEdit(0, "B"), diffSoftInput(SOFT_INPUT_SENTINEL + "AB", base = SOFT_INPUT_SENTINEL + "A"))
+    }
+
+    @Test
+    fun softInputResetsOnlyAtTheEdges() {
+        assertFalse(softInputNeedsReset(SOFT_INPUT_SENTINEL))
+        assertFalse(softInputNeedsReset(SOFT_INPUT_SENTINEL + "hello"))
+        assertTrue(softInputNeedsReset("xxx"))
+        assertTrue(softInputNeedsReset("x".repeat(300)))
     }
 }

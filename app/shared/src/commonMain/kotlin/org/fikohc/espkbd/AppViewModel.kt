@@ -38,6 +38,7 @@ import org.fikohc.espkbd.keys.GrabListener
 import org.fikohc.espkbd.keys.GrabUnavailableException
 import org.fikohc.espkbd.keys.HeldKeys
 import org.fikohc.espkbd.keys.KeyboardGrabber
+import org.fikohc.espkbd.keys.MODIFIERS
 import org.fikohc.espkbd.keys.isReleaseCombo
 import org.fikohc.espkbd.keys.charToKeys
 import org.fikohc.espkbd.keys.parseKeyCsv
@@ -112,7 +113,7 @@ class AppViewModel(
         viewModelScope.launch {
             for (event in grabEvents) {
                 when (event) {
-                    is GrabEvent.Key -> if (_state.value.grab == GrabMode.SYSTEM) sendKey(event.name, event.down)
+                    is GrabEvent.Key -> if (_state.value.grab == GrabMode.SYSTEM) sendKeyEvent(event.name, event.down)
                     is GrabEvent.InstantKey -> if (_state.value.grab == GrabMode.SYSTEM) tapInstantKey(event.name)
                     GrabEvent.Released -> stopGrab()
                 }
@@ -204,20 +205,20 @@ class AppViewModel(
                 return
             }
         }
-        sendKey(name, down)
+        sendKeyEvent(name, down)
     }
 
     // Press, hold briefly so the host sees a real key press, release.
     // Pauses the grab event loop meanwhile; later keys just wait their turn.
     private suspend fun tapInstantKey(name: String) {
-        sendKey(name, down = true)
+        sendKeyEvent(name, down = true)
         delay(INSTANT_KEY_HOLD)
-        sendKey(name, down = false)
+        sendKeyEvent(name, down = false)
     }
 
-    private fun sendKey(name: String, down: Boolean) {
+    private fun sendKeyEvent(name: String, down: Boolean) {
         val changed = if (down) held.press(name) else held.release(name)
-        if (changed) session?.setHeld(held.current)
+        if (changed) session?.hold(held.current)
     }
 
     // The app window lost focus: give the keyboard back, and release everything
@@ -248,10 +249,21 @@ class AppViewModel(
         }
     }
 
-    fun tapKey(name: String) {
+    // Soft-keyboard Backspace: one tap per deleted character
+    fun softBackspace(times: Int) {
         val s = session ?: return
-        s.tap(name)
-        _state.update { it.copy(lastTyped = name) }
+        if (times <= 0) return
+        repeat(times) { s.tap("backspace") }
+        _state.update { it.copy(lastTyped = "backspace") }
+    }
+
+    // A key event from the on-screen keyboard (key down only): sent as a tap, not a held key
+    fun softKey(name: String, shift: Boolean) {
+        if (name in MODIFIERS) return
+        val s = session ?: return
+        val keys = if (shift) "shift,$name" else name
+        s.tap(keys)
+        _state.update { it.copy(lastTyped = keys) }
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)

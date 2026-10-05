@@ -53,8 +53,8 @@ class KbdSessionTest {
     fun longPressIsOneHeldWriteUntilRelease() = runTest {
         val link = FakeLink()
         val (s, scope) = session(link)
-        s.setHeld(listOf("a"))
-        s.setHeld(listOf("a")) // key repeat
+        s.hold(listOf("a"))
+        s.hold(listOf("a")) // key repeat
         runCurrent()
         advanceTimeBy(2000)
         s.releaseAll()
@@ -67,10 +67,10 @@ class KbdSessionTest {
     fun quickKeystrokesAreNotDropped() = runTest {
         val link = FakeLink()
         val (s, scope) = session(link)
-        s.setHeld(listOf("a"))
-        s.setHeld(emptyList())
-        s.setHeld(listOf("b"))
-        s.setHeld(emptyList())
+        s.hold(listOf("a"))
+        s.hold(emptyList())
+        s.hold(listOf("b"))
+        s.hold(emptyList())
         s.tap("shift,c")
         runCurrent()
         assertEquals(

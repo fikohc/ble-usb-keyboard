@@ -18,8 +18,10 @@ class KbdSession(
     heartbeatInterval: Duration = HEARTBEAT_INTERVAL,
     private val onError: (Throwable) -> Unit = {},
 ) {
+    private class Write(val chr: KbdChar, val value: String)
+
     // Key writes keep their order: dropping an intermediate held set would lose a quick keystroke
-    private val writes = Channel<Pair<KbdChar, String>>(Channel.UNLIMITED)
+    private val writes = Channel<Write>(Channel.UNLIMITED)
     private var lastHeld: List<String> = emptyList()
 
     init {
@@ -30,24 +32,22 @@ class KbdSession(
             }
         }
         scope.launch {
-            for ((chr, value) in writes) {
-                safeWrite(chr, value)
-            }
+            for (write in writes) safeWrite(write.chr, write.value)
         }
     }
 
     // Make exactly these keys held on the host (long press = keep them in the set)
-    fun setHeld(keys: List<String>) {
+    fun hold(keys: List<String>) {
         if (keys == lastHeld) return
         lastHeld = keys
-        writes.trySend(KbdChar.KEYPRESS to keys.joinToString(","))
+        writes.trySend(Write(KbdChar.KEYPRESS, keys.joinToString(",")))
     }
 
-    fun releaseAll() = setHeld(emptyList())
+    fun releaseAll() = hold(emptyList())
 
     // Press and release keys, e.g. "shift,a"
     fun tap(csv: String) {
-        writes.trySend(KbdChar.KEYS to csv)
+        writes.trySend(Write(KbdChar.KEYS, csv))
     }
 
     private suspend fun safeWrite(chr: KbdChar, value: String) {

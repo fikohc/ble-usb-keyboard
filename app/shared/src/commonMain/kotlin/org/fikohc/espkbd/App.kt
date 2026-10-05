@@ -42,7 +42,9 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -81,6 +83,7 @@ import org.fikohc.espkbd.ble.BleDevice
 import org.fikohc.espkbd.ble.KableBleClient
 import org.fikohc.espkbd.keys.SOFT_INPUT_SENTINEL
 import org.fikohc.espkbd.keys.diffSoftInput
+import org.fikohc.espkbd.keys.softInputNeedsReset
 import org.fikohc.espkbd.keys.firmwareName
 import org.fikohc.espkbd.keys.formatKeys
 import org.fikohc.espkbd.keys.parseKeyCsv
@@ -241,12 +244,15 @@ private fun KeyPanel(state: UiState, vm: AppViewModel, modifier: Modifier) {
             .padding(12.dp)
             .border(3.dp, grabBorder, MaterialTheme.shapes.medium)
             .onFocusChanged { if (!it.hasFocus) vm.panelFocusLost() }
-            .onPreviewKeyEvent { event ->
-                val name = event.key.firmwareName() ?: return@onPreviewKeyEvent false
+            .onKeyEvent { event ->
+                val name = event.key.firmwareName() ?: return@onKeyEvent false
+                if (event.isFromSoftKeyboard()) {
+                    return@onKeyEvent true
+                }
                 when (event.type) {
                     KeyEventType.KeyDown -> vm.keyDown(name)
                     KeyEventType.KeyUp -> vm.keyUp(name)
-                    else -> return@onPreviewKeyEvent false
+                    else -> return@onKeyEvent false
                 }
                 true
             }
@@ -267,7 +273,8 @@ private fun KeyPanel(state: UiState, vm: AppViewModel, modifier: Modifier) {
     }
 }
 
-// Invisible text field that receives on-screen keyboard input and turns edits into taps
+// Invisible text field that receives on-screen keyboard input and turns edits into taps.
+// The text is kept between edits (see SoftInput.kt) so the IME keeps its shift/Caps Lock state.
 @Composable
 private fun SoftKeyboardInput(vm: AppViewModel, modifier: Modifier) {
     val reset = TextFieldValue(SOFT_INPUT_SENTINEL, TextRange(SOFT_INPUT_SENTINEL.length))
@@ -280,10 +287,10 @@ private fun SoftKeyboardInput(vm: AppViewModel, modifier: Modifier) {
                 value = new
                 return@BasicTextField
             }
-            val edit = diffSoftInput(new.text)
-            repeat(edit.backspaces) { vm.tapKey("backspace") }
+            val edit = diffSoftInput(new.text, value.text)
+            vm.softBackspace(edit.backspaces)
             vm.typeText(edit.inserted)
-            value = reset
+            value = if (softInputNeedsReset(new.text)) reset else new
         },
         keyboardOptions = KeyboardOptions(
             autoCorrectEnabled = false,

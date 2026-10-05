@@ -20,6 +20,7 @@ import org.fikohc.espkbd.ble.BleClient
 import org.fikohc.espkbd.ble.BleDevice
 import org.fikohc.espkbd.ble.BleException
 import org.fikohc.espkbd.ble.FakeLink
+import org.fikohc.espkbd.ble.KbdChar
 import org.fikohc.espkbd.ble.KbdLink
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
@@ -92,6 +93,23 @@ class AppViewModelConnectionTest {
             assertEquals(LinkStatus.NONE, s.link)
             assertEquals(Res.string.error_device_not_found, s.linkError?.fallback)
             assertEquals(1, ble.connects)
+        }
+    }
+
+    @Test
+    fun softKeyEventsAreTaps() = runTest(dispatcher) {
+        val link = FakeLink()
+        val ble = ScriptedBle().apply { connectResult = { link } }
+        withVm(ble) { vm ->
+            vm.select(KBD_A)
+            runCurrent()
+            vm.softKey("a", shift = true)
+            vm.softKey("enter", shift = false)
+            vm.softKey("shift", shift = true) // modifier alone: nothing
+            vm.softKey("backspace", shift = false)
+            runCurrent()
+            assertEquals(listOf("shift,a", "enter", "backspace"), link.writesTo(KbdChar.KEYS))
+            assertEquals(emptyList(), link.writesTo(KbdChar.KEYPRESS))
         }
     }
 
