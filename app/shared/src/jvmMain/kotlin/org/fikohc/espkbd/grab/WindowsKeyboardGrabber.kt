@@ -11,6 +11,7 @@ import espkbd.shared.generated.resources.Res
 import espkbd.shared.generated.resources.grab_failed
 import espkbd.shared.generated.resources.release_combo_windows
 import org.fikohc.espkbd.keys.GrabFilter
+import org.fikohc.espkbd.keys.GrabListener
 import org.fikohc.espkbd.keys.GrabUnavailableException
 import org.fikohc.espkbd.keys.KeyboardGrabber
 import java.util.concurrent.CompletableFuture
@@ -31,9 +32,9 @@ internal class WindowsKeyboardGrabber : KeyboardGrabber {
     // JNA callbacks must stay strongly reachable while installed
     private var proc: WinUser.LowLevelKeyboardProc? = null
 
-    override fun start(onKey: (name: String, down: Boolean) -> Unit, onReleased: () -> Unit) {
+    override fun start(listener: GrabListener) {
         if (thread != null) return
-        val filter = GrabFilter(onKey, onReleased)
+        val filter = GrabFilter(listener)
         val started = CompletableFuture<Unit>()
         thread = Thread({ runHook(filter, started) }, "keyboard-grab").apply {
             isDaemon = true
@@ -70,7 +71,7 @@ internal class WindowsKeyboardGrabber : KeyboardGrabber {
             }
             val ours = nCode >= 0 && down != null && info.flags and LLKHF_INJECTED == 0
             val name = windowsKeyName(info.vkCode, info.scanCode, info.flags and LLKHF_EXTENDED != 0)
-            if (ours && filter.handle(name, down!!)) {
+            if (ours && filter.handle(name, down)) {
                 LRESULT(1)
             } else {
                 user32.CallNextHookEx(hook, nCode, wParam, LPARAM(Pointer.nativeValue(info.pointer)))

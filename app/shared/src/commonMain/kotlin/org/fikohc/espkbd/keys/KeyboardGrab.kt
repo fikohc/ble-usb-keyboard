@@ -8,12 +8,23 @@ interface KeyboardGrabber {
     // How the release combination is spelled on this OS
     val releaseCombo: StringResource
 
-    // Start capturing. Callbacks run on a hook thread. [onReleased] fires when the user presses the
-    // release combination; capturing has already stopped by then (call [stop] to clean up).
+    // Start capturing; [listener] is called on a hook thread.
     // Throws [GrabUnavailableException] if the OS doesn't allow it.
-    fun start(onKey: (name: String, down: Boolean) -> Unit, onReleased: () -> Unit)
+    fun start(listener: GrabListener)
 
     fun stop()
+}
+
+// Called on the OS hook thread: must return quickly (hand off, don't block)
+interface GrabListener {
+    fun onKey(name: String, down: Boolean)
+
+    // A key the OS reports only as a single event (macOS Caps Lock toggles): the receiver
+    // presses it and releases it shortly after
+    fun onInstantKey(name: String)
+
+    // The user pressed the release combination; capturing has already stopped (call stop to clean up)
+    fun onReleased()
 }
 
 class GrabUnavailableException(val reason: StringResource, cause: Throwable? = null) : Exception(cause)
@@ -28,10 +39,7 @@ fun isReleaseCombo(held: Collection<String>, pressed: String): Boolean =
 
 // Tracks keys on the hook thread and spots the release combination there, so the keyboard comes
 // back even if the UI thread is stuck.
-class GrabFilter(
-    private val onKey: (name: String, down: Boolean) -> Unit,
-    private val onReleased: () -> Unit,
-) {
+class GrabFilter(private val listener: GrabListener) {
     private val held = mutableSetOf<String>()
 
     @kotlin.concurrent.Volatile
@@ -44,11 +52,18 @@ class GrabFilter(
         if (name == null) return true
         if (down && isReleaseCombo(held, name)) {
             active = false
-            onReleased()
+            listener.onReleased()
             return true
         }
         if (down) held += name else held -= name
-        onKey(name, down)
+        listener.onKey(name, down)
+        return true
+    }
+
+    // A key reported as one event (see GrabListener.onInstantKey). Returns true to swallow it.
+    fun handleInstant(name: String): Boolean {
+        if (!active) return false
+        listener.onInstantKey(name)
         return true
     }
 }

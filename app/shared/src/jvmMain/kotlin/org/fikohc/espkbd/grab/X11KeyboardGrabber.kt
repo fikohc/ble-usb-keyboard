@@ -9,6 +9,7 @@ import espkbd.shared.generated.resources.Res
 import espkbd.shared.generated.resources.grab_x11_failed
 import espkbd.shared.generated.resources.release_combo_linux
 import org.fikohc.espkbd.keys.GrabFilter
+import org.fikohc.espkbd.keys.GrabListener
 import org.fikohc.espkbd.keys.GrabUnavailableException
 import org.fikohc.espkbd.keys.KeyboardGrabber
 import java.util.concurrent.CompletableFuture
@@ -34,10 +35,10 @@ internal class X11KeyboardGrabber : KeyboardGrabber {
 
     @Volatile private var stopping = false
 
-    override fun start(onKey: (name: String, down: Boolean) -> Unit, onReleased: () -> Unit) {
+    override fun start(listener: GrabListener) {
         if (thread != null) return
         stopping = false
-        val filter = GrabFilter(onKey, onReleased)
+        val filter = GrabFilter(listener)
         val started = CompletableFuture<Unit>()
         thread = Thread({ runGrab(filter, started) }, "keyboard-grab").apply {
             isDaemon = true

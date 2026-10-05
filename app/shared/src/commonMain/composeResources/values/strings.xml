@@ -21,12 +21,12 @@
     <string name="hint_soft_keyboard">Tap here to open the keyboard</string>
     <string name="last_typed">Last typed: %1$s</string>
 
-    <string name="grab_prompt">Click to grab the keyboard, %1$s to release it</string>
+    <string name="grab_prompt">Click to grab the keyboard</string>
     <string name="grabbed">Keyboard grabbed</string>
-    <string name="grabbed_hint">Press %1$s to release</string>
+    <string name="grabbed_hint">Click or press %1$s to release</string>
     <string name="grab_window_only">Only keys typed in this window are sent. %1$s</string>
     <string name="grab_failed">The keyboard could not be grabbed</string>
-    <string name="grab_needs_accessibility">To send system shortcuts, allow EspKbd in System Settings → Privacy &amp; Security → Accessibility, then click again.</string>
+    <string name="grab_needs_accessibility">To send system shortcuts, allow EspKbd in System Settings → Privacy &amp; Security → Accessibility, then grab again.</string>
     <string name="grab_x11_failed">System shortcuts cannot be captured: another app holds the keyboard, or this is a Wayland session.</string>
     <!-- Release combination (keys/KeyboardGrab.kt isReleaseCombo), in each OS's key names -->
     <string name="release_combo_macos">Control + Option + Command + Esc</string>
@@ -35,6 +35,10 @@
 
     <string name="error_scan">Bluetooth scan failed</string>
     <string name="error_connect">Connection failed</string>
+    <string name="error_connect_timeout">Connection timed out</string>
+    <string name="error_device_not_found">Device is not advertising (switched off or out of range)</string>
+    <string name="error_bluetooth_unavailable">Bluetooth is off or not permitted</string>
+    <string name="error_rejected">The device rejected the request</string>
     <string name="error_write">Write failed</string>
     <string name="error_disconnected">Device disconnected</string>
 </resources>

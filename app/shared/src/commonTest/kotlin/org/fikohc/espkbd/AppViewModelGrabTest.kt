@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -20,6 +21,7 @@ import org.fikohc.espkbd.ble.BleDevice
 import org.fikohc.espkbd.ble.FakeLink
 import org.fikohc.espkbd.ble.KbdChar
 import org.fikohc.espkbd.ble.KbdLink
+import org.fikohc.espkbd.keys.GrabListener
 import org.fikohc.espkbd.keys.GrabUnavailableException
 import org.fikohc.espkbd.keys.KeyboardGrabber
 import org.jetbrains.compose.resources.StringResource
@@ -31,20 +33,18 @@ import kotlin.test.assertEquals
 private val DEVICE = BleDevice("id", "BLE-KBD")
 
 private class FakeBle(val link: FakeLink) : BleClient {
-    override fun scan(): Flow<BleDevice> = flowOf(DEVICE)
+    override fun scan(): Flow<List<BleDevice>> = flowOf(listOf(DEVICE))
     override suspend fun connect(id: String): KbdLink = link
 }
 
 private class FakeGrabber(private val refuse: StringResource? = null) : KeyboardGrabber {
     override val releaseCombo = Res.string.release_combo_linux
-    var onKey: ((String, Boolean) -> Unit)? = null
-    var onReleased: (() -> Unit)? = null
+    var listener: GrabListener? = null
     var running = false
 
-    override fun start(onKey: (name: String, down: Boolean) -> Unit, onReleased: () -> Unit) {
+    override fun start(listener: GrabListener) {
         refuse?.let { throw GrabUnavailableException(it) }
-        this.onKey = onKey
-        this.onReleased = onReleased
+        this.listener = listener
         running = true
     }
 
@@ -96,17 +96,50 @@ class AppViewModelGrabTest {
         connected(link, grabber) { vm ->
             vm.startGrab()
             assertEquals(GrabMode.SYSTEM, vm.state.value.grab)
-            grabber.onKey!!("gui", true)
-            grabber.onKey!!("tab", true)
-            grabber.onKey!!("tab", false)
+            val keys = grabber.listener!!
+            keys.onKey("gui", true)
+            keys.onKey("tab", true)
+            keys.onKey("tab", false)
             runCurrent()
             assertEquals(listOf("gui", "gui,tab", "gui"), link.held())
 
-            grabber.onReleased!!()
+            keys.onReleased()
             runCurrent()
             assertEquals(GrabMode.OFF, vm.state.value.grab)
             assertEquals(false, grabber.running)
             assertEquals("", link.held().last(), "everything is released with the grab")
+        }
+    }
+
+    @Test
+    fun instantKeyIsPressedThenReleasedAfterHold() = runTest(dispatcher) {
+        val link = FakeLink()
+        val grabber = FakeGrabber()
+        connected(link, grabber) { vm ->
+            vm.startGrab()
+            grabber.listener!!.onInstantKey("capslock")
+            runCurrent()
+            assertEquals(listOf("capslock"), link.held())
+
+            advanceTimeBy(INSTANT_KEY_HOLD.inWholeMilliseconds + 1)
+            assertEquals(listOf("capslock", ""), link.held())
+        }
+    }
+
+    @Test
+    fun quickSecondToggleIsItsOwnTap() = runTest(dispatcher) {
+        val link = FakeLink()
+        val grabber = FakeGrabber()
+        connected(link, grabber) { vm ->
+            vm.startGrab()
+            grabber.listener!!.onInstantKey("capslock")
+            runCurrent()
+            advanceTimeBy(INSTANT_KEY_HOLD.inWholeMilliseconds / 2)
+            grabber.listener!!.onInstantKey("capslock")
+            runCurrent()
+            // The second tap waits for the first to finish
+            advanceTimeBy(2 * INSTANT_KEY_HOLD.inWholeMilliseconds)
+            assertEquals(listOf("capslock", "", "capslock", ""), link.held())
         }
     }
 
@@ -128,6 +161,45 @@ class AppViewModelGrabTest {
             runCurrent()
             assertEquals(GrabMode.OFF, vm.state.value.grab)
             assertEquals("", link.held().last())
+        }
+    }
+
+    @Test
+    fun windowFocusLossEndsTheGrab() = runTest(dispatcher) {
+        val link = FakeLink()
+        val grabber = FakeGrabber()
+        connected(link, grabber) { vm ->
+            vm.startGrab()
+            grabber.listener!!.onKey("a", true)
+            runCurrent()
+
+            vm.windowFocusLost()
+            runCurrent()
+            assertEquals(GrabMode.OFF, vm.state.value.grab)
+            assertEquals(false, grabber.running)
+            assertEquals(listOf("a", ""), link.held())
+        }
+    }
+
+    @Test
+    fun panelFocusLossKeepsSystemGrab() = runTest(dispatcher) {
+        val grabber = FakeGrabber()
+        connected(FakeLink(), grabber) { vm ->
+            vm.startGrab()
+            vm.panelFocusLost()
+            assertEquals(GrabMode.SYSTEM, vm.state.value.grab)
+        }
+    }
+
+    @Test
+    fun clickTogglesTheGrab() = runTest(dispatcher) {
+        val grabber = FakeGrabber()
+        connected(FakeLink(), grabber) { vm ->
+            vm.toggleGrab()
+            assertEquals(GrabMode.SYSTEM, vm.state.value.grab)
+            vm.toggleGrab()
+            assertEquals(GrabMode.OFF, vm.state.value.grab)
+            assertEquals(false, grabber.running)
         }
     }
 

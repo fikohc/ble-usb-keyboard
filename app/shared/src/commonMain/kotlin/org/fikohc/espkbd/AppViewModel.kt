@@ -2,8 +2,12 @@ package org.fikohc.espkbd
 
 import androidx.lifecycle.ViewModel
 import espkbd.shared.generated.resources.Res
+import espkbd.shared.generated.resources.error_bluetooth_unavailable
 import espkbd.shared.generated.resources.error_connect
+import espkbd.shared.generated.resources.error_connect_timeout
+import espkbd.shared.generated.resources.error_device_not_found
 import espkbd.shared.generated.resources.error_disconnected
+import espkbd.shared.generated.resources.error_rejected
 import espkbd.shared.generated.resources.error_scan
 import espkbd.shared.generated.resources.error_write
 import androidx.lifecycle.viewModelScope
@@ -22,14 +26,15 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.fikohc.espkbd.ble.BleClient
+import org.fikohc.espkbd.ble.BleException
 import org.fikohc.espkbd.ble.BleDevice
 import org.fikohc.espkbd.ble.KbdChar
 import org.fikohc.espkbd.ble.KbdLink
 import org.fikohc.espkbd.ble.KbdSession
+import org.fikohc.espkbd.keys.GrabListener
 import org.fikohc.espkbd.keys.GrabUnavailableException
 import org.fikohc.espkbd.keys.HeldKeys
 import org.fikohc.espkbd.keys.KeyboardGrabber
@@ -38,11 +43,12 @@ import org.fikohc.espkbd.keys.charToKeys
 import org.fikohc.espkbd.keys.parseKeyCsv
 import org.jetbrains.compose.resources.StringResource
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
 enum class LinkStatus { NONE, CONNECTING, CONNECTED }
 
-// An error to show: the exception's message if it has one, otherwise a generic text
+// An error to show: [detail] if set, otherwise the resource text
 data class UiError(val fallback: StringResource, val detail: String? = null)
 
 enum class GrabMode {
@@ -76,7 +82,6 @@ class AppViewModel(
     private val ble: BleClient,
     // Null where the keyboard isn't grabbed (mobile): keys are sent whenever the app has focus
     private val grabber: KeyboardGrabber? = null,
-    private val reconnectDelay: Duration = 2.seconds,
     private val scanRetryDelay: Duration = 3.seconds,
 ) : ViewModel() {
     private val _state = MutableStateFlow(UiState())
@@ -93,8 +98,12 @@ class AppViewModel(
 
     private sealed interface GrabEvent {
         data class Key(val name: String, val down: Boolean) : GrabEvent
+
+        // Reported as a single event: pressed now, released after INSTANT_KEY_HOLD
+        data class InstantKey(val name: String) : GrabEvent
         data object Released : GrabEvent
     }
+
 
     val releaseCombo: StringResource? = grabber?.releaseCombo
 
@@ -104,6 +113,7 @@ class AppViewModel(
             for (event in grabEvents) {
                 when (event) {
                     is GrabEvent.Key -> if (_state.value.grab == GrabMode.SYSTEM) sendKey(event.name, event.down)
+                    is GrabEvent.InstantKey -> if (_state.value.grab == GrabMode.SYSTEM) tapInstantKey(event.name)
                     GrabEvent.Released -> stopGrab()
                 }
             }
@@ -125,14 +135,28 @@ class AppViewModel(
         if (current.link != LinkStatus.CONNECTED || current.grab == GrabMode.SYSTEM) return
         releaseAll()
         try {
-            g.start(
-                onKey = { name, down -> grabEvents.trySend(GrabEvent.Key(name, down)) },
-                onReleased = { grabEvents.trySend(GrabEvent.Released) },
-            )
+            g.start(object : GrabListener {
+                override fun onKey(name: String, down: Boolean) {
+                    grabEvents.trySend(GrabEvent.Key(name, down))
+                }
+
+                override fun onInstantKey(name: String) {
+                    grabEvents.trySend(GrabEvent.InstantKey(name))
+                }
+
+                override fun onReleased() {
+                    grabEvents.trySend(GrabEvent.Released)
+                }
+            })
             _state.update { it.copy(grab = GrabMode.SYSTEM, grabError = null) }
         } catch (e: GrabUnavailableException) {
             _state.update { it.copy(grab = GrabMode.WINDOW, grabError = UiError(e.reason)) }
         }
+    }
+
+    // Panel click: grab, or give the keyboard back if already grabbed
+    fun toggleGrab() {
+        if (_state.value.grab == GrabMode.OFF) startGrab() else stopGrab()
     }
 
     fun stopGrab() {
@@ -162,7 +186,7 @@ class AppViewModel(
             )
         }
         if (device != null) {
-            connectJob = viewModelScope.launch { connectLoop(device) }
+            connectJob = viewModelScope.launch { connect(device) }
         }
     }
 
@@ -183,14 +207,29 @@ class AppViewModel(
         sendKey(name, down)
     }
 
+    // Press, hold briefly so the host sees a real key press, release.
+    // Pauses the grab event loop meanwhile; later keys just wait their turn.
+    private suspend fun tapInstantKey(name: String) {
+        sendKey(name, down = true)
+        delay(INSTANT_KEY_HOLD)
+        sendKey(name, down = false)
+    }
+
     private fun sendKey(name: String, down: Boolean) {
         val changed = if (down) held.press(name) else held.release(name)
         if (changed) session?.setHeld(held.current)
     }
 
-    // Focus moved away: nothing we know is held stays held.
-    // A system grab keeps capturing regardless of focus, so it's left alone.
+    // The app window lost focus: give the keyboard back, and release everything
+    // (keys held now would never see their key up)
     fun windowFocusLost() {
+        stopGrab()
+        releaseAll()
+    }
+
+    // Focus moved elsewhere inside the window (e.g. the device picker): release held keys.
+    // A system grab keeps capturing regardless.
+    fun panelFocusLost() {
         if (_state.value.grab != GrabMode.SYSTEM) releaseAll()
     }
 
@@ -224,43 +263,39 @@ class AppViewModel(
             if (!wanted) return@collectLatest
             while (true) {
                 try {
-                    ble.scan().collect { device ->
-                        _state.update { s ->
-                            val others = s.devices.filter { it.id != device.id }
-                            s.copy(devices = (others + device).sortedBy { it.name }, scanError = null)
-                        }
-                    }
+                    ble.scan().collect { devices -> _state.update { it.copy(devices = devices, scanError = null) } }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    _state.update { it.copy(scanError = UiError(Res.string.error_scan, e.message)) }
+                    _state.update { it.copy(scanError = e.toUiError(Res.string.error_scan)) }
                 }
                 delay(scanRetryDelay)
             }
         }
     }
 
-    // Keep the selected device connected, reconnecting after drops
-    private suspend fun connectLoop(device: BleDevice) {
-        while (viewModelScope.isActive) {
-            _state.update { it.copy(link = LinkStatus.CONNECTING) }
-            var link: KbdLink? = null
-            try {
-                link = ble.connect(device.id)
-                runSession(link)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: LinkLostException) {
-                _state.update { it.copy(linkError = UiError(Res.string.error_disconnected)) }
-            } catch (e: Exception) {
-                _state.update { it.copy(linkError = UiError(Res.string.error_connect, e.message)) }
-            } finally {
-                session = null
-                held.clear()
-                link?.let { withContext(NonCancellable) { runCatching { it.close() } } }
-            }
-            _state.update { it.copy(selected = null, link = LinkStatus.NONE, usbHostConnected = null, heldKeys = emptyList()) }
-            delay(reconnectDelay)
+    // Connect and run until the link ends. Any failure resets the selection; the user picks again.
+    private suspend fun connect(device: BleDevice) {
+        _state.update { it.copy(link = LinkStatus.CONNECTING) }
+        var link: KbdLink? = null
+        var error: UiError? = null
+        try {
+            link = ble.connect(device.id)
+            runSession(link)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            error = e.toUiError(Res.string.error_connect)
+        } finally {
+            session = null
+            held.clear()
+            link?.let { withContext(NonCancellable) { runCatching { it.close() } } }
+        }
+        _state.update {
+            it.copy(
+                selected = null, link = LinkStatus.NONE, usbHostConnected = null,
+                heldKeys = emptyList(), linkError = error,
+            )
         }
     }
 
@@ -274,14 +309,28 @@ class AppViewModel(
         val usb = link.read(KbdChar.STATE) == "1"
         val keys = parseKeyCsv(link.read(KbdChar.KEYPRESS))
         session = KbdSession(link, this, onError = { e ->
-            _state.update { it.copy(linkError = UiError(Res.string.error_write, e.message)) }
+            // A dropped link ends the session on its own; only report rejected writes
+            if (e !is BleException.Disconnected) _state.update { it.copy(linkError = e.toUiError(Res.string.error_write)) }
         })
         _state.update {
             it.copy(link = LinkStatus.CONNECTED, usbHostConnected = usb, heldKeys = keys, linkError = null)
         }
         link.awaitDisconnect()
-        throw LinkLostException()
+        throw BleException.Disconnected()
     }
-
-    private class LinkLostException : Exception()
 }
+
+// How long an instant key (macOS Caps Lock) is held before its release
+val INSTANT_KEY_HOLD = 100.milliseconds
+
+private fun Throwable.toUiError(fallback: StringResource): UiError = UiError(
+    when (this) {
+        is BleException.BluetoothUnavailable -> Res.string.error_bluetooth_unavailable
+        is BleException.DeviceNotFound -> Res.string.error_device_not_found
+        is BleException.ConnectTimeout -> Res.string.error_connect_timeout
+        is BleException.ConnectFailed -> Res.string.error_connect
+        is BleException.Disconnected -> Res.string.error_disconnected
+        is BleException.Rejected -> Res.string.error_rejected
+        else -> fallback
+    },
+)

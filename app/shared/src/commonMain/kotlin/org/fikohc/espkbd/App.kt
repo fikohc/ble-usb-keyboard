@@ -193,7 +193,10 @@ private fun DeviceRow(device: BleDevice) {
 
 @Composable
 private fun linkLabel(state: UiState): String = when {
-    state.selected == null -> state.scanError?.text() ?: stringResource(Res.string.link_not_connected)
+    // A failed or dropped connection clears the selection; say why
+    state.selected == null -> state.linkError?.let { stringResource(Res.string.link_disconnected_reason, it.text()) }
+        ?: state.scanError?.text()
+        ?: stringResource(Res.string.link_not_connected)
     state.link == LinkStatus.CONNECTED -> stringResource(Res.string.link_connected)
     state.link == LinkStatus.CONNECTING -> stringResource(Res.string.link_connecting)
     else -> state.linkError?.let { stringResource(Res.string.link_disconnected_reason, it.text()) }
@@ -223,7 +226,6 @@ private fun KeyPanel(state: UiState, vm: AppViewModel, modifier: Modifier) {
     val windowFocused = LocalWindowInfo.current.isWindowFocused
     val active = state.link == LinkStatus.CONNECTED
 
-    // Keys held while the app loses focus would never see their key up
     LaunchedEffect(windowFocused) {
         if (!windowFocused) vm.windowFocusLost()
     }
@@ -238,7 +240,7 @@ private fun KeyPanel(state: UiState, vm: AppViewModel, modifier: Modifier) {
         modifier
             .padding(12.dp)
             .border(3.dp, grabBorder, MaterialTheme.shapes.medium)
-            .onFocusChanged { if (!it.hasFocus) vm.windowFocusLost() }
+            .onFocusChanged { if (!it.hasFocus) vm.panelFocusLost() }
             .onPreviewKeyEvent { event ->
                 val name = event.key.firmwareName() ?: return@onPreviewKeyEvent false
                 when (event.type) {
@@ -251,7 +253,7 @@ private fun KeyPanel(state: UiState, vm: AppViewModel, modifier: Modifier) {
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
                 runCatching { focusRequester.requestFocus() }
                 if (usesSoftKeyboard) keyboard?.show()
-                vm.startGrab()
+                vm.toggleGrab()
             }
             .padding(12.dp),
         contentAlignment = Alignment.Center,

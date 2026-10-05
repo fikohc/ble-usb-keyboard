@@ -11,6 +11,7 @@ import espkbd.shared.generated.resources.grab_failed
 import espkbd.shared.generated.resources.grab_needs_accessibility
 import espkbd.shared.generated.resources.release_combo_macos
 import org.fikohc.espkbd.keys.GrabFilter
+import org.fikohc.espkbd.keys.GrabListener
 import org.fikohc.espkbd.keys.GrabUnavailableException
 import org.fikohc.espkbd.keys.KeyboardGrabber
 import java.util.concurrent.CompletableFuture
@@ -74,11 +75,11 @@ internal class MacKeyboardGrabber : KeyboardGrabber {
     // JNA callbacks must stay strongly reachable while installed
     private var callback: CoreGraphics.EventTapCallback? = null
 
-    override fun start(onKey: (name: String, down: Boolean) -> Unit, onReleased: () -> Unit) {
+    override fun start(listener: GrabListener) {
         if (thread != null) return
         if (!isTrusted(prompt = true)) throw GrabUnavailableException(Res.string.grab_needs_accessibility)
 
-        val filter = GrabFilter(onKey, onReleased)
+        val filter = GrabFilter(listener)
         val started = CompletableFuture<Unit>()
         thread = Thread({ runTap(filter, started) }, "keyboard-grab").apply {
             isDaemon = true
@@ -122,8 +123,8 @@ internal class MacKeyboardGrabber : KeyboardGrabber {
                 FLAGS_CHANGED -> {
                     val code = cg.CGEventGetIntegerValueField(event!!, KEYCODE_FIELD).toInt()
                     val swallow = if (code == CAPS_LOCK) {
-                        // Caps Lock only reports toggles: send each as a tap
-                        filter.handle("capslock", true) && filter.handle("capslock", false)
+                        // Caps Lock only reports toggles, not presses and releases
+                        filter.handleInstant("capslock")
                     } else {
                         val bit = MAC_MODIFIER_BITS[code]
                         val down = bit != null && cg.CGEventGetFlags(event) and bit != 0L
