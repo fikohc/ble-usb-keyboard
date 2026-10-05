@@ -12,6 +12,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -19,6 +20,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -28,7 +30,10 @@ import org.fikohc.espkbd.ble.BleDevice
 import org.fikohc.espkbd.ble.KbdChar
 import org.fikohc.espkbd.ble.KbdLink
 import org.fikohc.espkbd.ble.KbdSession
+import org.fikohc.espkbd.keys.GrabUnavailableException
 import org.fikohc.espkbd.keys.HeldKeys
+import org.fikohc.espkbd.keys.KeyboardGrabber
+import org.fikohc.espkbd.keys.isReleaseCombo
 import org.fikohc.espkbd.keys.charToKeys
 import org.fikohc.espkbd.keys.parseKeyCsv
 import org.jetbrains.compose.resources.StringResource
@@ -39,6 +44,16 @@ enum class LinkStatus { NONE, CONNECTING, CONNECTED }
 
 // An error to show: the exception's message if it has one, otherwise a generic text
 data class UiError(val fallback: StringResource, val detail: String? = null)
+
+enum class GrabMode {
+    OFF,
+
+    // OS hook: every key, including system shortcuts, goes to the device
+    SYSTEM,
+
+    // OS refused the hook: only keys typed into the app window are sent
+    WINDOW,
+}
 
 data class UiState(
     val devices: List<BleDevice> = emptyList(),
@@ -52,10 +67,15 @@ data class UiState(
     val lastTyped: String? = null,
     val scanError: UiError? = null,
     val linkError: UiError? = null,
+    val grab: GrabMode = GrabMode.OFF,
+    // Why grab fell back to WINDOW mode
+    val grabError: UiError? = null,
 )
 
 class AppViewModel(
     private val ble: BleClient,
+    // Null where the keyboard isn't grabbed (mobile): keys are sent whenever the app has focus
+    private val grabber: KeyboardGrabber? = null,
     private val reconnectDelay: Duration = 2.seconds,
     private val scanRetryDelay: Duration = 3.seconds,
 ) : ViewModel() {
@@ -68,8 +88,58 @@ class AppViewModel(
     private var session: KbdSession? = null
     private var connectJob: Job? = null
 
+    // Hook threads hand events to the main thread through this
+    private val grabEvents = Channel<GrabEvent>(Channel.UNLIMITED)
+
+    private sealed interface GrabEvent {
+        data class Key(val name: String, val down: Boolean) : GrabEvent
+        data object Released : GrabEvent
+    }
+
+    val releaseCombo: StringResource? = grabber?.releaseCombo
+
     init {
         viewModelScope.launch { scanLoop() }
+        viewModelScope.launch {
+            for (event in grabEvents) {
+                when (event) {
+                    is GrabEvent.Key -> if (_state.value.grab == GrabMode.SYSTEM) sendKey(event.name, event.down)
+                    GrabEvent.Released -> stopGrab()
+                }
+            }
+        }
+        // Never keep the keyboard captured with nothing to send it to
+        viewModelScope.launch {
+            _state.map { it.link }.distinctUntilChanged().collect { if (it != LinkStatus.CONNECTED) stopGrab() }
+        }
+    }
+
+    override fun onCleared() {
+        stopGrab()
+    }
+
+    // Capture the whole keyboard (desktop). Falls back to window-only capture if the OS refuses.
+    fun startGrab() {
+        val g = grabber ?: return
+        val current = _state.value
+        if (current.link != LinkStatus.CONNECTED || current.grab == GrabMode.SYSTEM) return
+        releaseAll()
+        try {
+            g.start(
+                onKey = { name, down -> grabEvents.trySend(GrabEvent.Key(name, down)) },
+                onReleased = { grabEvents.trySend(GrabEvent.Released) },
+            )
+            _state.update { it.copy(grab = GrabMode.SYSTEM, grabError = null) }
+        } catch (e: GrabUnavailableException) {
+            _state.update { it.copy(grab = GrabMode.WINDOW, grabError = UiError(e.reason)) }
+        }
+    }
+
+    fun stopGrab() {
+        if (_state.value.grab == GrabMode.OFF) return
+        grabber?.stop()
+        _state.update { it.copy(grab = GrabMode.OFF) }
+        releaseAll()
     }
 
     // Scanning needs Bluetooth permission on Android; call once it's granted
@@ -96,17 +166,35 @@ class AppViewModel(
         }
     }
 
-    // Hardware key down/up, by firmware key name
-    fun keyDown(name: String) {
-        if (held.press(name)) session?.setHeld(held.current)
+    // Hardware key down/up from the app window, by firmware key name
+    fun keyDown(name: String) = windowKey(name, down = true)
+
+    fun keyUp(name: String) = windowKey(name, down = false)
+
+    private fun windowKey(name: String, down: Boolean) {
+        if (grabber != null) {
+            // Desktop sends keys only while grabbed; in SYSTEM mode the hook delivers them instead
+            if (_state.value.grab != GrabMode.WINDOW) return
+            if (down && isReleaseCombo(held.current, name)) {
+                stopGrab()
+                return
+            }
+        }
+        sendKey(name, down)
     }
 
-    fun keyUp(name: String) {
-        if (held.release(name)) session?.setHeld(held.current)
+    private fun sendKey(name: String, down: Boolean) {
+        val changed = if (down) held.press(name) else held.release(name)
+        if (changed) session?.setHeld(held.current)
     }
 
-    // Focus moved away: nothing we know is held stays held
-    fun releaseAll() {
+    // Focus moved away: nothing we know is held stays held.
+    // A system grab keeps capturing regardless of focus, so it's left alone.
+    fun windowFocusLost() {
+        if (_state.value.grab != GrabMode.SYSTEM) releaseAll()
+    }
+
+    private fun releaseAll() {
         held.clear()
         session?.releaseAll()
     }
@@ -171,7 +259,7 @@ class AppViewModel(
                 held.clear()
                 link?.let { withContext(NonCancellable) { runCatching { it.close() } } }
             }
-            _state.update { it.copy(link = LinkStatus.NONE, usbHostConnected = null, heldKeys = emptyList()) }
+            _state.update { it.copy(selected = null, link = LinkStatus.NONE, usbHostConnected = null, heldKeys = emptyList()) }
             delay(reconnectDelay)
         }
     }

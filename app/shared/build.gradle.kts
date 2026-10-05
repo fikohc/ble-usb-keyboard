@@ -58,6 +58,11 @@ kotlin {
             implementation(libs.kotlinx.coroutinesCore)
             implementation(libs.kable.core)
         }
+        jvmMain.dependencies {
+            // OS keyboard hooks for grabbing the keyboard
+            implementation(libs.jna)
+            implementation(libs.jna.platform)
+        }
         jvmTest.dependencies {
             // Skiko natives: compose resources query the system theme when loading strings
             implementation(compose.desktop.currentOs)

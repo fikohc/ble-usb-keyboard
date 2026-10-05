@@ -1,6 +1,7 @@
 package org.fikohc.espkbd
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -36,6 +37,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -57,7 +59,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import espkbd.shared.generated.resources.Res
 import espkbd.shared.generated.resources.disconnect
-import espkbd.shared.generated.resources.hint_hardware_keyboard
+import espkbd.shared.generated.resources.grab_prompt
+import espkbd.shared.generated.resources.grab_window_only
+import espkbd.shared.generated.resources.grabbed
+import espkbd.shared.generated.resources.grabbed_hint
 import espkbd.shared.generated.resources.hint_soft_keyboard
 import espkbd.shared.generated.resources.last_typed
 import espkbd.shared.generated.resources.link_connected
@@ -79,6 +84,7 @@ import org.fikohc.espkbd.keys.diffSoftInput
 import org.fikohc.espkbd.keys.firmwareName
 import org.fikohc.espkbd.keys.formatKeys
 import org.fikohc.espkbd.keys.parseKeyCsv
+import org.jetbrains.compose.resources.StringResource
 import org.jetbrains.compose.resources.stringResource
 
 @Composable
@@ -87,7 +93,7 @@ fun App(
     blePermissionGranted: Boolean = true,
     onRequestBlePermission: () -> Unit = {},
 ) {
-    val vm = viewModel { AppViewModel(KableBleClient()) }
+    val vm = viewModel { AppViewModel(KableBleClient(), createKeyboardGrabber()) }
     val state by vm.state.collectAsStateWithLifecycle()
 
     LaunchedEffect(blePermissionGranted) { vm.setScanAllowed(blePermissionGranted) }
@@ -219,15 +225,20 @@ private fun KeyPanel(state: UiState, vm: AppViewModel, modifier: Modifier) {
 
     // Keys held while the app loses focus would never see their key up
     LaunchedEffect(windowFocused) {
-        if (!windowFocused) vm.releaseAll()
+        if (!windowFocused) vm.windowFocusLost()
     }
     LaunchedEffect(active) {
         if (active) runCatching { focusRequester.requestFocus() }
     }
 
+    val grabbed = state.grab != GrabMode.OFF
+    val grabBorder = if (grabbed) MaterialTheme.colorScheme.primary else Color.Transparent
+
     Box(
         modifier
-            .onFocusChanged { if (!it.hasFocus) vm.releaseAll() }
+            .padding(12.dp)
+            .border(3.dp, grabBorder, MaterialTheme.shapes.medium)
+            .onFocusChanged { if (!it.hasFocus) vm.windowFocusLost() }
             .onPreviewKeyEvent { event ->
                 val name = event.key.firmwareName() ?: return@onPreviewKeyEvent false
                 when (event.type) {
@@ -240,8 +251,9 @@ private fun KeyPanel(state: UiState, vm: AppViewModel, modifier: Modifier) {
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
                 runCatching { focusRequester.requestFocus() }
                 if (usesSoftKeyboard) keyboard?.show()
+                vm.startGrab()
             }
-            .padding(24.dp),
+            .padding(12.dp),
         contentAlignment = Alignment.Center,
     ) {
         if (usesSoftKeyboard) {
@@ -249,7 +261,7 @@ private fun KeyPanel(state: UiState, vm: AppViewModel, modifier: Modifier) {
         } else {
             Box(Modifier.size(1.dp).focusRequester(focusRequester).focusable())
         }
-        PanelContent(state)
+        PanelContent(state, vm.releaseCombo)
     }
 }
 
@@ -281,7 +293,7 @@ private fun SoftKeyboardInput(vm: AppViewModel, modifier: Modifier) {
 }
 
 @Composable
-private fun PanelContent(state: UiState) {
+private fun PanelContent(state: UiState, releaseCombo: StringResource?) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         when {
             state.link != LinkStatus.CONNECTED -> {
@@ -295,16 +307,21 @@ private fun PanelContent(state: UiState) {
                 fontWeight = FontWeight.SemiBold,
                 textAlign = TextAlign.Center,
             )
+            releaseCombo != null && state.grab == GrabMode.OFF ->
+                Message(stringResource(Res.string.grab_prompt, stringResource(releaseCombo)))
+            releaseCombo != null -> Message(stringResource(Res.string.grabbed))
             else -> {
                 Message(stringResource(Res.string.press_a_key))
-                Hint(
-                    stringResource(
-                        if (usesSoftKeyboard) Res.string.hint_soft_keyboard else Res.string.hint_hardware_keyboard,
-                    ),
-                )
+                Hint(stringResource(Res.string.hint_soft_keyboard))
             }
         }
-        if (state.link == LinkStatus.CONNECTED) {
+        if (state.link == LinkStatus.CONNECTED && state.usbHostConnected != false) {
+            if (releaseCombo != null && state.grab != GrabMode.OFF) {
+                Hint(stringResource(Res.string.grabbed_hint, stringResource(releaseCombo)))
+                if (state.grab == GrabMode.WINDOW) {
+                    state.grabError?.let { Hint(stringResource(Res.string.grab_window_only, it.text())) }
+                }
+            }
             state.lastTyped?.let { Hint(stringResource(Res.string.last_typed, formatKeys(parseKeyCsv(it)))) }
         }
     }
