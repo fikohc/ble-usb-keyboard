@@ -1,0 +1,54 @@
+name: app
+
+on:
+  push:
+    branches: [main]
+    paths: ["app/**", ".github/workflows/app.yml"]
+  pull_request:
+    paths: ["app/**", ".github/workflows/app.yml"]
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: app
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            tasks: ":shared:jvmTest :androidApp:assembleDebug :desktopApp:packageDeb"
+            artifacts: |
+              app/androidApp/build/outputs/apk/debug/*.apk
+              app/desktopApp/build/compose/binaries/main/deb/*.deb
+          - os: windows-latest
+            tasks: ":desktopApp:packageMsi"
+            artifacts: app/desktopApp/build/compose/binaries/main/msi/*.msi
+          - os: macos-latest
+            tasks: ":desktopApp:packageDmg"
+            artifacts: app/desktopApp/build/compose/binaries/main/dmg/*.dmg
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - if: runner.os == 'Linux'
+        uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Build
+        shell: bash
+        run: ./gradlew ${{ matrix.tasks }} --stacktrace
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: espkbd-${{ runner.os }}
+          path: ${{ matrix.artifacts }}
+          if-no-files-found: error
