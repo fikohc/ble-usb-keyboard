@@ -21,6 +21,7 @@ import org.fikohc.espkbd.ble.BleDevice
 import org.fikohc.espkbd.ble.FakeLink
 import org.fikohc.espkbd.ble.KbdChar
 import org.fikohc.espkbd.ble.KbdLink
+import org.fikohc.espkbd.ble.LinkStatus
 import org.fikohc.espkbd.keys.GrabListener
 import org.fikohc.espkbd.keys.GrabUnavailableException
 import org.fikohc.espkbd.keys.KeyboardGrabber
@@ -70,7 +71,7 @@ class AppViewModelGrabTest {
         try {
             vm.select(DEVICE)
             runCurrent()
-            assertEquals(LinkStatus.CONNECTED, vm.state.value.link)
+            assertEquals(LinkStatus.CONNECTED, vm.state.value.link?.status)
             block(vm)
         } finally {
             vm.viewModelScope.cancel()

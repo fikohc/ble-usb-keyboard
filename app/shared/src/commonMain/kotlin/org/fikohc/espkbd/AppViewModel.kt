@@ -11,43 +11,35 @@ import espkbd.shared.generated.resources.error_rejected
 import espkbd.shared.generated.resources.error_scan
 import espkbd.shared.generated.resources.error_write
 import androidx.lifecycle.viewModelScope
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.transformWhile
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import org.fikohc.espkbd.ble.BleClient
 import org.fikohc.espkbd.ble.BleException
 import org.fikohc.espkbd.ble.BleDevice
-import org.fikohc.espkbd.ble.KbdChar
-import org.fikohc.espkbd.ble.KbdLink
-import org.fikohc.espkbd.ble.KbdSession
+import org.fikohc.espkbd.ble.BleManager
+import org.fikohc.espkbd.ble.KbdConnection
+import org.fikohc.espkbd.ble.LinkState
+import org.fikohc.espkbd.ble.LinkStatus
 import org.fikohc.espkbd.keys.GrabListener
 import org.fikohc.espkbd.keys.GrabUnavailableException
-import org.fikohc.espkbd.keys.HeldKeys
 import org.fikohc.espkbd.keys.KeyboardGrabber
 import org.fikohc.espkbd.keys.MODIFIERS
 import org.fikohc.espkbd.keys.isReleaseCombo
 import org.fikohc.espkbd.keys.charToKeys
-import org.fikohc.espkbd.keys.parseKeyCsv
 import org.jetbrains.compose.resources.StringResource
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
-
-enum class LinkStatus { NONE, CONNECTING, CONNECTED }
 
 // An error to show: [detail] if set, otherwise the resource text
 data class UiError(val fallback: StringResource, val detail: String? = null)
@@ -65,11 +57,8 @@ enum class GrabMode {
 data class UiState(
     val devices: List<BleDevice> = emptyList(),
     val selected: BleDevice? = null,
-    val link: LinkStatus = LinkStatus.NONE,
-    // Whether the ESP32 is mounted by its USB host; null until read
-    val usbHostConnected: Boolean? = null,
-    // Keys the device reports as held
-    val heldKeys: List<String> = emptyList(),
+    // State of the connection to the selected device; null when none is selected
+    val link: LinkState? = null,
     // Last keys sent as a tap (soft keyboard), for feedback
     val lastTyped: String? = null,
     val scanError: UiError? = null,
@@ -80,19 +69,20 @@ data class UiState(
 )
 
 class AppViewModel(
-    private val ble: BleClient,
+    ble: BleClient,
     // Null where the keyboard isn't grabbed (mobile): keys are sent whenever the app has focus
     private val grabber: KeyboardGrabber? = null,
-    private val scanRetryDelay: Duration = 3.seconds,
+    scanRetryDelay: Duration = 3.seconds,
 ) : ViewModel() {
+    private val manager = BleManager(ble, viewModelScope, scanRetryDelay)
+
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
 
     private val scanAllowed = MutableStateFlow(false)
     private val pickerOpen = MutableStateFlow(false)
-    private val held = HeldKeys()
-    private var session: KbdSession? = null
-    private var connectJob: Job? = null
+    private var connection: KbdConnection? = null
+    private var connectionJob: Job? = null
 
     // Hook threads hand events to the main thread through this
     private val grabEvents = Channel<GrabEvent>(Channel.UNLIMITED)
@@ -109,7 +99,12 @@ class AppViewModel(
     val releaseCombo: StringResource? = grabber?.releaseCombo
 
     init {
-        viewModelScope.launch { scanLoop() }
+        viewModelScope.launch { scanGate() }
+        viewModelScope.launch {
+            manager.observeDevices().collect { scan ->
+                _state.update { it.copy(devices = scan.devices, scanError = scan.error?.toUiError(Res.string.error_scan)) }
+            }
+        }
         viewModelScope.launch {
             for (event in grabEvents) {
                 when (event) {
@@ -121,7 +116,7 @@ class AppViewModel(
         }
         // Never keep the keyboard captured with nothing to send it to
         viewModelScope.launch {
-            _state.map { it.link }.distinctUntilChanged().collect { if (it != LinkStatus.CONNECTED) stopGrab() }
+            _state.map { it.link?.status }.distinctUntilChanged().collect { if (it != LinkStatus.CONNECTED) stopGrab() }
         }
     }
 
@@ -133,7 +128,7 @@ class AppViewModel(
     fun startGrab() {
         val g = grabber ?: return
         val current = _state.value
-        if (current.link != LinkStatus.CONNECTED || current.grab == GrabMode.SYSTEM) return
+        if (current.link?.status != LinkStatus.CONNECTED || current.grab == GrabMode.SYSTEM) return
         releaseAll()
         try {
             g.start(object : GrabListener {
@@ -177,19 +172,43 @@ class AppViewModel(
     }
 
     fun select(device: BleDevice?) {
-        connectJob?.cancel()
-        session = null
-        held.clear()
-        _state.update {
-            it.copy(
-                selected = device, link = LinkStatus.NONE, usbHostConnected = null,
-                heldKeys = emptyList(), lastTyped = null, linkError = null,
-            )
-        }
-        if (device != null) {
-            connectJob = viewModelScope.launch { connect(device) }
+        connectionJob?.cancel()
+        connection?.disconnect()
+        connection = null
+        _state.update { it.copy(selected = device, link = null, lastTyped = null, linkError = null) }
+        if (device == null) return
+
+        val c = manager.connect(device)
+        connection = c
+        connectionJob = viewModelScope.launch {
+            c.observe()
+                .transformWhile { emit(it); it.status != LinkStatus.DISCONNECTED }
+                .collect(::onLinkState)
         }
     }
+
+    // A link that ends on its own resets the selection; the user picks again.
+    // (disconnect() only comes from select(), which stops collecting first.)
+    private fun onLinkState(link: LinkState) {
+        if (link.status == LinkStatus.DISCONNECTED) {
+            connection = null
+            _state.update {
+                it.copy(selected = null, link = null, linkError = link.error?.toUiError(Res.string.error_connect))
+            }
+            return
+        }
+        _state.update {
+            it.copy(
+                link = link,
+                // While connected, the error is a rejected write
+                linkError = link.error?.toUiError(Res.string.error_write),
+            )
+        }
+    }
+
+    // The connection, if it can take keys now
+    private fun connected(): KbdConnection? =
+        connection?.takeIf { _state.value.link?.status == LinkStatus.CONNECTED }
 
     // Hardware key down/up from the app window, by firmware key name
     fun keyDown(name: String) = windowKey(name, down = true)
@@ -200,7 +219,7 @@ class AppViewModel(
         if (grabber != null) {
             // Desktop sends keys only while grabbed; in SYSTEM mode the hook delivers them instead
             if (_state.value.grab != GrabMode.WINDOW) return
-            if (down && isReleaseCombo(held.current, name)) {
+            if (down && isReleaseCombo(connection?.pressed.orEmpty(), name)) {
                 stopGrab()
                 return
             }
@@ -217,8 +236,7 @@ class AppViewModel(
     }
 
     private fun sendKeyEvent(name: String, down: Boolean) {
-        val changed = if (down) held.press(name) else held.release(name)
-        if (changed) session?.hold(held.current)
+        connection?.key(name, down)
     }
 
     // The app window lost focus: give the keyboard back, and release everything
@@ -235,13 +253,12 @@ class AppViewModel(
     }
 
     private fun releaseAll() {
-        held.clear()
-        session?.releaseAll()
+        connection?.releaseAll()
     }
 
     // Text from the soft keyboard: each character becomes a tap
     fun typeText(text: String) {
-        val s = session ?: return
+        val s = connected() ?: return
         for (c in text) {
             val keys = charToKeys(c) ?: continue
             s.tap(keys)
@@ -251,7 +268,7 @@ class AppViewModel(
 
     // Soft-keyboard Backspace: one tap per deleted character
     fun softBackspace(times: Int) {
-        val s = session ?: return
+        val s = connected() ?: return
         if (times <= 0) return
         repeat(times) { s.tap("backspace") }
         _state.update { it.copy(lastTyped = "backspace") }
@@ -260,75 +277,19 @@ class AppViewModel(
     // A key event from the on-screen keyboard (key down only): sent as a tap, not a held key
     fun softKey(name: String, shift: Boolean) {
         if (name in MODIFIERS) return
-        val s = session ?: return
+        val s = connected() ?: return
         val keys = if (shift) "shift,$name" else name
         s.tap(keys)
         _state.update { it.copy(lastTyped = keys) }
     }
 
-    @OptIn(ExperimentalCoroutinesApi::class)
-    private suspend fun scanLoop() {
-        // Scan while there's no connection, or while the picker is open to show alternatives
-        combine(scanAllowed, pickerOpen, _state) { allowed, open, s ->
-            allowed && (open || s.link != LinkStatus.CONNECTED)
-        }.distinctUntilChanged().collectLatest { wanted ->
-            if (!wanted) return@collectLatest
-            while (true) {
-                try {
-                    ble.scan().collect { devices -> _state.update { it.copy(devices = devices, scanError = null) } }
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    _state.update { it.copy(scanError = e.toUiError(Res.string.error_scan)) }
-                }
-                delay(scanRetryDelay)
-            }
+    // Scan while there's no connection, or while the picker is open to show alternatives
+    private suspend fun scanGate() {
+        combine(scanAllowed, pickerOpen, _state.map { it.link?.status }) { allowed, open, status ->
+            allowed && (open || status != LinkStatus.CONNECTED)
+        }.distinctUntilChanged().collect { wanted ->
+            if (wanted) manager.startScanJob() else manager.stopScanJob()
         }
-    }
-
-    // Connect and run until the link ends. Any failure resets the selection; the user picks again.
-    private suspend fun connect(device: BleDevice) {
-        _state.update { it.copy(link = LinkStatus.CONNECTING) }
-        var link: KbdLink? = null
-        var error: UiError? = null
-        try {
-            link = ble.connect(device.id)
-            runSession(link)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            error = e.toUiError(Res.string.error_connect)
-        } finally {
-            session = null
-            held.clear()
-            link?.let { withContext(NonCancellable) { runCatching { it.close() } } }
-        }
-        _state.update {
-            it.copy(
-                selected = null, link = LinkStatus.NONE, usbHostConnected = null,
-                heldKeys = emptyList(), linkError = error,
-            )
-        }
-    }
-
-    private suspend fun runSession(link: KbdLink): Nothing = coroutineScope {
-        launch {
-            link.observe(KbdChar.STATE).collect { v -> _state.update { it.copy(usbHostConnected = v == "1") } }
-        }
-        launch {
-            link.observe(KbdChar.KEYPRESS).collect { v -> _state.update { it.copy(heldKeys = parseKeyCsv(v)) } }
-        }
-        val usb = link.read(KbdChar.STATE) == "1"
-        val keys = parseKeyCsv(link.read(KbdChar.KEYPRESS))
-        session = KbdSession(link, this, onError = { e ->
-            // A dropped link ends the session on its own; only report rejected writes
-            if (e !is BleException.Disconnected) _state.update { it.copy(linkError = e.toUiError(Res.string.error_write)) }
-        })
-        _state.update {
-            it.copy(link = LinkStatus.CONNECTED, usbHostConnected = usb, heldKeys = keys, linkError = null)
-        }
-        link.awaitDisconnect()
-        throw BleException.Disconnected()
     }
 }
 

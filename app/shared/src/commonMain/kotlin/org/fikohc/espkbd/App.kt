@@ -76,11 +76,14 @@ import espkbd.shared.generated.resources.no_device
 import espkbd.shared.generated.resources.permission_grant
 import espkbd.shared.generated.resources.permission_needed
 import espkbd.shared.generated.resources.press_a_key
+import espkbd.shared.generated.resources.rssi_dbm
 import espkbd.shared.generated.resources.scanning
 import espkbd.shared.generated.resources.select_device
 import espkbd.shared.generated.resources.usb_host_missing
 import org.fikohc.espkbd.ble.BleDevice
 import org.fikohc.espkbd.ble.KableBleClient
+import org.fikohc.espkbd.ble.LinkStatus
+import org.fikohc.espkbd.ble.UsbState
 import org.fikohc.espkbd.keys.SOFT_INPUT_SENTINEL
 import org.fikohc.espkbd.keys.diffSoftInput
 import org.fikohc.espkbd.keys.softInputNeedsReset
@@ -131,6 +134,9 @@ private fun TopBar(state: UiState, vm: AppViewModel) {
                 singleLine = true,
                 placeholder = { Text(stringResource(Res.string.select_device)) },
                 supportingText = { Text(linkLabel(state)) },
+                // Always non-null: the text field decides once whether it has a suffix,
+                // so one that starts as null never shows up later
+                suffix = { selectedRssi(state)?.let { RssiLabel(it) } },
                 trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
                 modifier = Modifier
                     .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
@@ -147,9 +153,11 @@ private fun TopBar(state: UiState, vm: AppViewModel) {
                 state.devices.forEach { device ->
                     DropdownMenuItem(
                         text = { DeviceRow(device) },
+                        trailingIcon = device.rssi?.let { rssi -> { RssiLabel(rssi) } },
                         onClick = {
                             expanded = false
-                            if (device != state.selected) vm.select(device)
+                            // RSSI changes with every advertisement, so compare by id
+                            if (device.id != state.selected?.id) vm.select(device)
                         },
                     )
                 }
@@ -165,7 +173,7 @@ private fun TopBar(state: UiState, vm: AppViewModel) {
                 }
             }
         }
-        if (state.link == LinkStatus.CONNECTED && state.usbHostConnected == false) {
+        if (state.link?.status == LinkStatus.CONNECTED && state.link.usb == UsbState.DISCONNECTED) {
             Text(
                 stringResource(Res.string.usb_host_missing),
                 color = MaterialTheme.colorScheme.onErrorContainer,
@@ -178,6 +186,21 @@ private fun TopBar(state: UiState, vm: AppViewModel) {
             )
         }
     }
+}
+
+// Live link RSSI once connected, the latest advertisement's before that
+private fun selectedRssi(state: UiState): Int? {
+    val selected = state.selected ?: return null
+    return state.link?.rssi ?: state.devices.find { it.id == selected.id }?.rssi
+}
+
+@Composable
+private fun RssiLabel(rssi: Int) {
+    Text(
+        stringResource(Res.string.rssi_dbm, rssi),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }
 
 @Composable
@@ -200,8 +223,8 @@ private fun linkLabel(state: UiState): String = when {
     state.selected == null -> state.linkError?.let { stringResource(Res.string.link_disconnected_reason, it.text()) }
         ?: state.scanError?.text()
         ?: stringResource(Res.string.link_not_connected)
-    state.link == LinkStatus.CONNECTED -> stringResource(Res.string.link_connected)
-    state.link == LinkStatus.CONNECTING -> stringResource(Res.string.link_connecting)
+    state.link?.status == LinkStatus.CONNECTED -> stringResource(Res.string.link_connected)
+    state.link?.status == LinkStatus.CONNECTING -> stringResource(Res.string.link_connecting)
     else -> state.linkError?.let { stringResource(Res.string.link_disconnected_reason, it.text()) }
         ?: stringResource(Res.string.link_disconnected)
 }
@@ -227,7 +250,7 @@ private fun KeyPanel(state: UiState, vm: AppViewModel, modifier: Modifier) {
     val focusRequester = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
     val windowFocused = LocalWindowInfo.current.isWindowFocused
-    val active = state.link == LinkStatus.CONNECTED
+    val active = state.link?.status == LinkStatus.CONNECTED
 
     LaunchedEffect(windowFocused) {
         if (!windowFocused) vm.windowFocusLost()
@@ -303,15 +326,17 @@ private fun SoftKeyboardInput(vm: AppViewModel, modifier: Modifier) {
 
 @Composable
 private fun PanelContent(state: UiState, releaseCombo: StringResource?) {
+    val link = state.link
+    val heldKeys = parseKeyCsv(link?.keysHeld.orEmpty())
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         when {
-            state.link != LinkStatus.CONNECTED -> {
+            link?.status != LinkStatus.CONNECTED -> {
                 Message(stringResource(Res.string.no_device))
-                if (state.link == LinkStatus.CONNECTING) Hint(stringResource(Res.string.link_connecting))
+                if (link?.status == LinkStatus.CONNECTING) Hint(stringResource(Res.string.link_connecting))
             }
-            state.usbHostConnected == false -> Message(stringResource(Res.string.usb_host_missing))
-            state.heldKeys.isNotEmpty() -> Text(
-                formatKeys(state.heldKeys),
+            link.usb == UsbState.DISCONNECTED -> Message(stringResource(Res.string.usb_host_missing))
+            heldKeys.isNotEmpty() -> Text(
+                formatKeys(heldKeys),
                 fontSize = 40.sp,
                 fontWeight = FontWeight.SemiBold,
                 textAlign = TextAlign.Center,
@@ -324,7 +349,7 @@ private fun PanelContent(state: UiState, releaseCombo: StringResource?) {
                 Hint(stringResource(Res.string.hint_soft_keyboard))
             }
         }
-        if (state.link == LinkStatus.CONNECTED && state.usbHostConnected != false) {
+        if (link?.status == LinkStatus.CONNECTED && link.usb != UsbState.DISCONNECTED) {
             if (releaseCombo != null && state.grab != GrabMode.OFF) {
                 Hint(stringResource(Res.string.grabbed_hint, stringResource(releaseCombo)))
                 if (state.grab == GrabMode.WINDOW) {

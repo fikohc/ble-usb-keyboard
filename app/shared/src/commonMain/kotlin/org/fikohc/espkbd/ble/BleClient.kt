@@ -31,7 +31,8 @@ class KbdUuids(val service: Uuid, private val chars: Map<KbdChar, Uuid>) {
     }
 }
 
-data class BleDevice(val id: String, val name: String)
+// rssi: signal strength of the latest advertisement in dBm, null if unknown
+data class BleDevice(val id: String, val name: String, val rssi: Int? = null)
 
 // A device that hasn't advertised for this long is treated as gone (devices advertise every ~100 ms)
 val DEVICE_STALE_AFTER = 10.seconds
@@ -78,6 +79,9 @@ interface KbdLink {
     suspend fun write(chr: KbdChar, value: String)
 
     fun observe(chr: KbdChar): Flow<String>
+
+    // Signal strength of the connection in dBm, null if the platform can't tell
+    suspend fun rssi(): Int?
 
     suspend fun close()
 }

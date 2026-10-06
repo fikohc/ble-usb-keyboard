@@ -1,6 +1,7 @@
 package org.fikohc.espkbd.ble
 
 import com.juul.kable.Advertisement
+import com.juul.kable.ExperimentalKableApi
 import com.juul.kable.GattRequestRejectedException
 import com.juul.kable.GattStatusException
 import com.juul.kable.Peripheral
@@ -52,7 +53,7 @@ class KableBleClient(timeSource: TimeSource = TimeSource.Monotonic) : BleClient 
         }
         scanner.advertisements.collect { adv ->
             val id = adv.identifier.toString()
-            devices[id] = BleDevice(id, adv.name ?: adv.peripheralName ?: id) to adv
+            devices[id] = BleDevice(id, adv.name ?: adv.peripheralName ?: id, adv.rssi) to adv
             send(currentDevices())
         }
     }
@@ -104,6 +105,16 @@ private class KableLink(private val peripheral: Peripheral, private val uuids: K
         peripheral.observe(chr.toKable())
             .map { it.decodeToString() }
             .catch { e -> throw if (e is CancellationException) e else e.toBleException() }
+
+    @OptIn(ExperimentalKableApi::class)
+    override suspend fun rssi(): Int? = try {
+        peripheral.rssi().takeIf { it != Int.MIN_VALUE }
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        // Unsupported, or the link is going down; awaitDisconnect reports the latter
+        null
+    }
 
     override suspend fun close() {
         withContext(NonCancellable) {

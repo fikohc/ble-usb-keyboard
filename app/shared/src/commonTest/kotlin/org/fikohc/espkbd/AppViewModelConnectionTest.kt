@@ -22,6 +22,7 @@ import org.fikohc.espkbd.ble.BleException
 import org.fikohc.espkbd.ble.FakeLink
 import org.fikohc.espkbd.ble.KbdChar
 import org.fikohc.espkbd.ble.KbdLink
+import org.fikohc.espkbd.ble.LinkStatus
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
@@ -90,7 +91,7 @@ class AppViewModelConnectionTest {
 
             val s = vm.state.value
             assertNull(s.selected)
-            assertEquals(LinkStatus.NONE, s.link)
+            assertNull(s.link)
             assertEquals(Res.string.error_device_not_found, s.linkError?.fallback)
             assertEquals(1, ble.connects)
         }
@@ -120,14 +121,13 @@ class AppViewModelConnectionTest {
         withVm(ble) { vm ->
             vm.select(KBD_A)
             runCurrent()
-            assertEquals(LinkStatus.CONNECTED, vm.state.value.link)
+            assertEquals(LinkStatus.CONNECTED, vm.state.value.link?.status)
 
             link.disconnected.complete(Unit)
             runCurrent()
             val s = vm.state.value
             assertNull(s.selected)
-            assertEquals(LinkStatus.NONE, s.link)
-            assertNull(s.usbHostConnected)
+            assertNull(s.link)
             assertEquals(Res.string.error_disconnected, s.linkError?.fallback)
         }
     }

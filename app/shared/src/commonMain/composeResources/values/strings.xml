@@ -5,6 +5,7 @@
     <string name="select_device">Select device</string>
     <string name="scanning">Scanning…</string>
     <string name="disconnect">Disconnect</string>
+    <string name="rssi_dbm">%1$d dBm</string>
     <string name="usb_host_missing">ESP32 is not connected to a USB host</string>
 
     <string name="link_not_connected">Not connected</string>
