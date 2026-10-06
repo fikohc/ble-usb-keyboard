@@ -3,4 +3,9 @@
 cmake_minimum_required(VERSION 3.22)
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+
+# scripts/ build each target with its own lock file, so dependencies.lock keeps its target
+if(DEFINED ESPKBD_DEPENDENCIES_LOCK)
+    idf_build_set_property(DEPENDENCIES_LOCK ${ESPKBD_DEPENDENCIES_LOCK})
+endif()
 project(sample_project_cpp)
